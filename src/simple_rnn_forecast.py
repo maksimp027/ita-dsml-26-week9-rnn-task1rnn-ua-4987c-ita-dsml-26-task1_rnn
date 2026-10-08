@@ -108,7 +108,11 @@ def make_windows(series: np.ndarray, window: int) -> Tuple[np.ndarray, np.ndarra
     Keras RNN layers expect inputs shaped as (batch, time, features).
     Here features=1 because the time series is univariate.
     """
-    raise NotImplementedError
+    N = len(series) - window
+    X = np.array([series[i:i + window] for i in range(N)])
+    X = X.reshape((N, window, 1))
+    y = series[window:].reshape((N, 1))
+    return X, y
 
 
 def time_split(
@@ -148,7 +152,19 @@ def time_split(
     - Do NOT shuffle.
     - The split is performed on already-windowed samples.
     """
-    raise NotImplementedError
+    n_samples = len(X)
+    n_train = int(n_samples * train_frac)
+    n_val = int(n_samples * val_frac)
+    n_test = n_samples - n_train - n_val
+
+    if n_train <= 0 or n_val <= 0 or n_test <= 0:
+        raise ValueError("Invalid fractions, one of the splits is empty.")
+
+    X_train, y_train = X[:n_train], y[:n_train]
+    X_val, y_val = X[n_train:n_train + n_val], y[n_train:n_train + n_val]
+    X_test, y_test = X[n_train + n_val:], y[n_train + n_val:]
+
+    return (X_train, y_train), (X_val, y_val), (X_test, y_test)
 
 
 def build_model(
@@ -186,7 +202,19 @@ def build_model(
     -----
     You may change the architecture slightly, but keep I/O shapes the same.
     """
-    raise NotImplementedError
+    model = tf.keras.Sequential([
+        tf.keras.layers.Input(shape=(window, 1)),
+        tf.keras.layers.LSTM(n_units),
+        tf.keras.layers.Dropout(dropout),
+        tf.keras.layers.Dense(dense_units, activation="relu"),
+        tf.keras.layers.Dense(1)
+    ])
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
+        loss="mse",
+        metrics=["mae"]
+    )
+    return model
 
 
 def train_model(
@@ -245,7 +273,30 @@ def train_model(
     - Prefer using EarlyStopping (optional) to reduce overfitting.
     - Keep the function deterministic as much as possible.
     """
-    raise NotImplementedError
+    tf.keras.utils.set_random_seed(seed)
+
+    X, y = make_windows(series, window)
+    (X_train, y_train), (X_val, y_val), (X_test, y_test) = time_split(
+        X, y, train_frac=train_frac, val_frac=val_frac
+    )
+
+    model = build_model(window)
+
+    early_stopping = tf.keras.callbacks.EarlyStopping(
+        monitor="val_loss", patience=5, restore_best_weights=True
+    )
+
+    history = model.fit(
+        X_train, y_train,
+        validation_data=(X_val, y_val),
+        epochs=epochs,
+        batch_size=batch_size,
+        verbose=verbose,
+        callbacks=[early_stopping],
+        shuffle=False
+    )
+
+    return model, X_test, y_test, history
 
 
 # ----------------------------
